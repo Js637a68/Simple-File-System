@@ -140,7 +140,6 @@ bool    fs_mount(FileSystem *fs, Disk *disk) {
 
     
     fs->disk = disk;
-    //memcpy(&fs->meta_data, &block.super, sizeof(SuperBlock));
     fs->meta_data = block.super;
     return fs_initialize_free_block_bitmap(fs); 
 }
@@ -221,9 +220,6 @@ bool    fs_remove(FileSystem *fs, size_t inode_number) {
     for(uint32_t i = 0 ; i < POINTERS_PER_INODE; ++i)
     {
         if(inode.direct[i] == 0) break;
-        //char data[BLOCK_SIZE];
-        //memset(data, 0, sizeof(data));
-        //assert(disk_write(fs->disk, inode.direct[i], data) != DISK_FAILURE);
         fs->free_blocks[inode.direct[i]] = false;
     }
     if(inode.indirect != 0)
@@ -234,14 +230,10 @@ bool    fs_remove(FileSystem *fs, size_t inode_number) {
         for(; i < POINTERS_PER_BLOCK; ++i) 
         {
             if(block.pointers[i] == 0) break;
-            char data[BLOCK_SIZE];
-            memset(data, 0, sizeof(data));
-            assert(disk_write(fs->disk, block.pointers[i], data) != DISK_FAILURE);
             fs->free_blocks[block.pointers[i]] = false;
         }
-        memset(block.data, 0, sizeof(block.data));
-        assert(disk_write(fs->disk, inode.indirect, block.data) != DISK_FAILURE);
-        fs->free_blocks[inode.indirect] = false;
+        if(i!= 0)
+            fs->free_blocks[inode.indirect] = false;
     }
 
     memset(&inode, 0, sizeof(Inode));
@@ -346,12 +338,17 @@ ssize_t fs_write(FileSystem *fs, size_t inode_number, char *data, size_t length,
     ssize_t written = 0;
     for(; point < POINTERS_PER_INODE && length > 0; point++)
     {
-        if(node.direct[point] == 0) node.direct[point] = fs_allocate_free_block(fs);
-        if(node.direct[point] == 0) goto last;
         Block block;
-        assert(disk_read(fs->disk, node.direct[point], block.data) != DISK_FAILURE);
-        const ssize_t can_write = length < BLOCK_SIZE ? length : BLOCK_SIZE;
-        ssize_t copy_size = can_write - offset % BLOCK_SIZE;
+        memset(block.data, 0, BLOCK_SIZE);
+        if(node.direct[point] == 0) 
+        {
+            node.direct[point] = fs_allocate_free_block(fs);
+            if(node.direct[point] == 0) goto last;  
+        }
+        else assert(disk_read(fs->disk, node.direct[point], block.data) != DISK_FAILURE);
+
+        const ssize_t remaining = BLOCK_SIZE - offset % BLOCK_SIZE;
+        const ssize_t copy_size = remaining < length? remaining : length;
         memcpy(block.data + offset % BLOCK_SIZE, data + written, copy_size);
         assert(disk_write(fs->disk, node.direct[point], block.data) != DISK_FAILURE);
         length -= copy_size;
@@ -362,21 +359,29 @@ ssize_t fs_write(FileSystem *fs, size_t inode_number, char *data, size_t length,
     {
         point -= POINTERS_PER_INODE;
         assert(point >= 0);
-        if(node.indirect == 0) node.indirect = fs_allocate_free_block(fs);
-        if(node.indirect == 0) goto last;
         Block block;
-        assert(disk_read(fs->disk, node.indirect, block.data) != DISK_FAILURE);
+        memset(block.data, 0, BLOCK_SIZE);
+        if(node.indirect == 0) 
+        {
+            assert(offset%BLOCK_SIZE == 0);
+            node.indirect = fs_allocate_free_block(fs);
+            if(node.indirect == 0) goto last;
+        }
+        else assert(disk_read(fs->disk, node.indirect, block.data) != DISK_FAILURE);
         while(length > 0)
         {
-            block.pointers[point] = fs_allocate_free_block(fs);
-            if(block.pointers[point] == 0) break;
-            
-            Block data_block = {0};
-            assert(disk_read(fs->disk, block.pointers[point], data_block.data) != DISK_FAILURE);
-            const ssize_t can_write = length > BLOCK_SIZE ? BLOCK_SIZE : length;
-            ssize_t copy_size = can_write - offset % BLOCK_SIZE;
-            memcpy(data_block.data + offset%BLOCK_SIZE, data + written, copy_size);
-           
+            Block data_block;
+            memset(data_block.data, 0, BLOCK_SIZE);
+            if(block.pointers[point] == 0) 
+            {
+                block.pointers[point] = fs_allocate_free_block(fs);
+                if(block.pointers[point] == 0) break;
+            }
+            else assert(disk_read(fs->disk, block.pointers[point], data_block.data) != DISK_FAILURE);
+
+            const ssize_t remaining = BLOCK_SIZE - offset % BLOCK_SIZE;
+            const ssize_t copy_size = remaining < length? remaining : length;
+            memcpy(data_block.data + offset%BLOCK_SIZE, data + written, copy_size);     
             assert(disk_write(fs->disk, block.pointers[point], data_block.data) != DISK_FAILURE);
             point++;
             length -= copy_size;
@@ -434,10 +439,7 @@ bool    fs_initialize_free_block_bitmap(FileSystem *fs)
 uint32_t fs_allocate_free_block(FileSystem *fs)
 {
     for (uint32_t i = 1; i < fs->meta_data.blocks; i++) {
-        if (!fs->free_blocks[i]) {
-            char data[BLOCK_SIZE];
-            memset(data, 0, sizeof(data));
-            disk_write(fs->disk, i, data);
+        if (!fs->free_blocks[i]) {        
             fs->free_blocks[i] = true;
             return i;
         }
