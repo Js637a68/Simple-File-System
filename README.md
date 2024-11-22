@@ -1,7 +1,7 @@
 # Simple-File-System
 cse-30341-fa19-project06，一个简短的文件系统
 
-测试：功能一样，功能一样，在write读写磁盘块次数不一样是因为我这里没有磁盘块可分配时直接goto最后保存inode，没有过多的错误处理
+测试：功能一样，在write读写磁盘块次数不一样是因为我这里没有磁盘块可分配时直接goto最后保存inode，没有过多的错误处理
 ```shell
 Testing debug on data/image.5 ... Success
 Testing debug on data/image.20 ... Success
